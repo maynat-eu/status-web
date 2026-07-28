@@ -1,1 +1,1 @@
-# maynatstatus.github.io
+# anybooot.github.io
