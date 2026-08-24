@@ -333,7 +333,7 @@
            ============================================================ */
         .quick-links {
             display: grid;
-            grid-template-columns: repeat(4, 1fr);
+            grid-template-columns: repeat(5, 1fr);
             gap: 14px;
             margin-bottom: 40px;
         }
@@ -400,6 +400,28 @@
             flex: 1;
             height: 1px;
             background: linear-gradient(90deg, var(--glass-border), transparent);
+        }
+        .group-title .refresh-btn {
+            background: var(--glass-2);
+            border: 1px solid var(--glass-border);
+            border-radius: 999px;
+            padding: 5px 14px;
+            color: var(--ink-dim);
+            font-size: .8rem;
+            cursor: pointer;
+            transition: .2s;
+            font-family: var(--font-body);
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .group-title .refresh-btn:hover {
+            background: var(--glass);
+            color: var(--ice);
+            border-color: var(--ice);
+        }
+        .group-title .refresh-btn i {
+            font-size: .8rem;
         }
 
         /* ============================================================
@@ -701,7 +723,7 @@
            ============================================================ */
         @media (max-width: 860px) {
             .quick-links {
-                grid-template-columns: repeat(2, 1fr);
+                grid-template-columns: repeat(3, 1fr);
             }
         }
         @media (max-width: 720px) {
@@ -746,6 +768,10 @@
             .footer {
                 justify-content: center;
                 text-align: center;
+            }
+            .group-title .refresh-btn {
+                font-size: .7rem;
+                padding: 4px 10px;
             }
         }
         @media (max-width: 420px) {
@@ -840,7 +866,7 @@
             <div class="f-left">
                 <span>© 2026 maynat.eu</span><span>·</span>
                 <span>făcut cu <span class="heart">♥</span> pentru comunitate</span><span>·</span>
-                <span class="ver">status · v2.0</span>
+                <span class="ver">status · v2.1</span>
             </div>
             <div class="f-right">
                 <a href="https://discord.maynat.eu" target="_blank"><i class="fab fa-discord"></i></a>
@@ -886,15 +912,14 @@
             }
 
             // ============================================================
-            // 2. CONFIG — încărcat din fișier extern
-            //    ⚠️  IP-urile și datele sensibile sunt într-un fișier JSON
-            //        separat, NU în HTML. Astfel, la F12 nu se văd în sursă.
+            // 2. CONFIG — încărcat din fișier extern (config.json)
+            //    ⚠️  IP-urile și datele sensibile sunt în fișier JSON,
+            //        NU în HTML. Astfel, la F12 nu se văd în sursă.
             // ============================================================
             let CONFIG = null;
 
             async function loadConfig() {
                 try {
-                    // Încearcă să încarce din config.json (sau poți schimba cu un endpoint PHP)
                     const res = await fetch('config.json?' + Date.now());
                     if (!res.ok) throw new Error('HTTP ' + res.status);
                     CONFIG = await res.json();
@@ -906,7 +931,8 @@
                             { icon: '⛏️', label: 'Server IP', sub: 'maynat.eu', action: 'copy', value: 'maynat.eu' },
                             { icon: '💬', label: 'Discord', sub: 'Comunitate', url: 'https://discord.maynat.eu' },
                             { icon: '🎵', label: 'TikTok', sub: '@maynat.ct.ws', url: 'https://tiktok.com/@maynat.ct.ws' },
-                            { icon: '🛒', label: 'Magazin', sub: 'Store', url: 'https://store.maynat.eu' }
+                            { icon: '🛒', label: 'Magazin', sub: 'Store', url: 'https://store.maynat.eu' },
+                            { icon: '🔄', label: 'Refresh', sub: 'actualizează', action: 'refresh' }
                         ],
                         groups: [{
                             name: 'SERVERE MINECRAFT',
@@ -926,11 +952,14 @@
                             { icon: 'fa-home', label: 'Home', url: 'https://maynat.ct.ws' },
                             { icon: 'fa-copy', label: 'Copiază IP', action: 'copy' },
                             { icon: 'fa-discord', label: 'Discord', url: 'https://discord.maynat.eu' },
-                            { icon: 'fa-store', label: 'Magazin', url: 'https://store.maynat.eu' }
+                            { icon: 'fa-store', label: 'Magazin', url: 'https://store.maynat.eu' },
+                            { icon: 'fa-sync', label: 'Refresh', action: 'refresh' }
                         ]
                     };
                 }
                 renderAll();
+                // Start periodic check
+                startPeriodicCheck();
             }
 
             // ============================================================
@@ -959,6 +988,13 @@
                             e.preventDefault();
                             copyToClipboard(item.value || item.label, item.label + ' copiat!');
                         });
+                    } else if (item.action === 'refresh') {
+                        a.href = '#';
+                        a.addEventListener('click', function(e) {
+                            e.preventDefault();
+                            checkAllStatuses();
+                            showToast('Status actualizat!', '🔄');
+                        });
                     } else if (item.url) {
                         a.href = item.url;
                         a.target = '_blank';
@@ -982,12 +1018,13 @@
                 CONFIG.groups.forEach((group, gi) => {
                     const wrapper = document.createElement('div');
 
-                    // Title
+                    // Title with refresh button
                     const title = document.createElement('div');
                     title.className = 'group-title';
                     title.innerHTML = `
                         <span class="tag">${group.name}</span>
                         <span class="rule"></span>
+                        <button class="refresh-btn" data-group="${gi}"><i class="fas fa-sync-alt"></i> Refresh</button>
                     `;
                     wrapper.appendChild(title);
 
@@ -1015,11 +1052,32 @@
                             type: item.ip ? 'minecraft' : 'web',
                             ip: item.ip || null,
                             url: item.url || null,
-                            badgeId: id + '-badge'
+                            badgeId: id + '-badge',
+                            groupIndex: gi,
+                            itemIndex: ii
                         };
                     });
 
                     container.appendChild(wrapper);
+
+                    // Attach refresh event for this group
+                    const btn = wrapper.querySelector('.refresh-btn');
+                    btn.addEventListener('click', function() {
+                        const gi = parseInt(this.dataset.group);
+                        const cards = wrapper.querySelectorAll('.status-card');
+                        cards.forEach(card => {
+                            const data = card._statusData;
+                            if (data) {
+                                const badge = document.getElementById(data.badgeId);
+                                if (badge) {
+                                    badge.className = 'status-badge checking';
+                                    badge.innerHTML = `<span class="pulse-dot"></span> Se verifică...`;
+                                }
+                                checkSingleStatus(data);
+                            }
+                        });
+                        showToast('Grup actualizat!', '🔄');
+                    });
                 });
             }
 
@@ -1035,6 +1093,13 @@
                             e.preventDefault();
                             const ip = CONFIG.quickLinks.find(q => q.action === 'copy');
                             if (ip) copyToClipboard(ip.value || ip.label, ip.label + ' copiat!');
+                        });
+                    } else if (item.action === 'refresh') {
+                        a.href = '#';
+                        a.addEventListener('click', function(e) {
+                            e.preventDefault();
+                            checkAllStatuses();
+                            showToast('Status actualizat!', '🔄');
                         });
                     } else if (item.url) {
                         a.href = item.url;
@@ -1055,22 +1120,32 @@
                 for (const card of cards) {
                     const data = card._statusData;
                     if (!data) continue;
+                    // Reset to checking
                     const badge = document.getElementById(data.badgeId);
-                    if (!badge) continue;
-
-                    try {
-                        if (data.type === 'minecraft' && data.ip) {
-                            await checkMinecraft(data.ip, badge);
-                        } else if (data.type === 'web' && data.url) {
-                            await checkWeb(data.url, badge);
-                        } else {
-                            badge.className = 'status-badge offline';
-                            badge.innerHTML = `<span class="pulse-dot"></span> Necunoscut`;
-                        }
-                    } catch (e) {
-                        badge.className = 'status-badge offline';
-                        badge.innerHTML = `<span class="pulse-dot"></span> Eroare`;
+                    if (badge) {
+                        badge.className = 'status-badge checking';
+                        badge.innerHTML = `<span class="pulse-dot"></span> Se verifică...`;
                     }
+                    await checkSingleStatus(data);
+                }
+            }
+
+            async function checkSingleStatus(data) {
+                const badge = document.getElementById(data.badgeId);
+                if (!badge) return;
+
+                try {
+                    if (data.type === 'minecraft' && data.ip) {
+                        await checkMinecraft(data.ip, badge);
+                    } else if (data.type === 'web' && data.url) {
+                        await checkWeb(data.url, badge);
+                    } else {
+                        badge.className = 'status-badge offline';
+                        badge.innerHTML = `<span class="pulse-dot"></span> Necunoscut`;
+                    }
+                } catch (e) {
+                    badge.className = 'status-badge offline';
+                    badge.innerHTML = `<span class="pulse-dot"></span> Eroare`;
                 }
             }
 
@@ -1081,8 +1156,19 @@
                     const data = await res.json();
                     if (data.online) {
                         badge.className = 'status-badge online';
-                        const players = data.players ? data.players.online : '?';
-                        badge.innerHTML = `<span class="pulse-dot"></span> Online · ${players} jucători`;
+                        let players = '?';
+                        let max = '';
+                        if (data.players) {
+                            if (typeof data.players === 'object' && data.players.online !== undefined) {
+                                players = data.players.online;
+                                if (data.players.max !== undefined) {
+                                    max = '/' + data.players.max;
+                                }
+                            } else if (typeof data.players === 'number') {
+                                players = data.players;
+                            }
+                        }
+                        badge.innerHTML = `<span class="pulse-dot"></span> Online · ${players}${max} jucători`;
                     } else {
                         badge.className = 'status-badge offline';
                         badge.innerHTML = `<span class="pulse-dot"></span> Offline`;
@@ -1098,12 +1184,10 @@
                     // Folosim HEAD pentru a verifica rapid
                     const res = await fetch(url, { method: 'HEAD', mode: 'no-cors' });
                     // no-cors returnează opaque, nu putem citi status, dar requestul ajunge
-                    // Considerăm online dacă nu aruncă excepție.
                     badge.className = 'status-badge online';
                     badge.innerHTML = `<span class="pulse-dot"></span> Online`;
                 } catch {
-                    // Dacă fetch aruncă (CORS, etc), încercăm cu un proxy sau fallback
-                    // Pentru simplitate, încercăm un GET cu timeout
+                    // Fallback cu GET + timeout
                     try {
                         const ctrl = new AbortController();
                         const timeout = setTimeout(() => ctrl.abort(), 4000);
@@ -1119,13 +1203,24 @@
             }
 
             // ============================================================
-            // 5. COPY
+            // 5. PERIODIC CHECK
+            // ============================================================
+            let checkInterval = null;
+
+            function startPeriodicCheck() {
+                if (checkInterval) clearInterval(checkInterval);
+                checkInterval = setInterval(() => {
+                    if (CONFIG) checkAllStatuses();
+                }, 30000); // 30 secunde
+            }
+
+            // ============================================================
+            // 6. COPY
             // ============================================================
             function copyToClipboard(text, successMsg) {
                 navigator.clipboard.writeText(text).then(() => {
                     showToast(successMsg || 'Copiat!', '📋');
                 }).catch(() => {
-                    // Fallback
                     const ta = document.createElement('textarea');
                     ta.value = text;
                     document.body.appendChild(ta);
@@ -1141,7 +1236,7 @@
             }
 
             // ============================================================
-            // 6. TOAST
+            // 7. TOAST
             // ============================================================
             let toastTimeout = null;
 
@@ -1154,7 +1249,6 @@
                 iconEl.textContent = icon || '✅';
                 msgEl.textContent = msg;
 
-                // Reset progress
                 progress.style.animation = 'none';
                 void progress.offsetWidth;
                 progress.style.animation = 'shrink 3s linear forwards';
@@ -1174,7 +1268,7 @@
             });
 
             // ============================================================
-            // 7. SMOOTH SCROLL (dacă există anchor)
+            // 8. SMOOTH SCROLL
             // ============================================================
             document.querySelectorAll('a[href^="#"]').forEach(a => {
                 a.addEventListener('click', function(e) {
@@ -1187,17 +1281,12 @@
             });
 
             // ============================================================
-            // 8. START
+            // 9. START
             // ============================================================
             loadConfig();
 
-            // Re-check la intervale
-            setInterval(() => {
-                if (CONFIG) checkAllStatuses();
-            }, 45000);
-
             console.log('🌊 MAYNAT · Status — config încărcat din fișier extern (IP-uri ascunse în sursă)');
-            console.log('ℹ️  Dacă vrei să folosești .env, creează un endpoint PHP care citește .env și returnează JSON.');
+            console.log('ℹ️  Actualizare automată la fiecare 30 de secunde.');
 
         })();
     </script>
