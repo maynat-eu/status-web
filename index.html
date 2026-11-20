@@ -24,6 +24,7 @@
       --stone-2: #3a3f49;
       --sun: #3b7dff;
       --red: #ff5a4d;
+      --yellow: #f5b800;
       --white: #fff;
       --f-d: 'Bungee', system-ui, sans-serif;
       --f-b: 'DM Sans', system-ui, sans-serif;
@@ -219,14 +220,18 @@
       align-items: center;
       gap: 8px;
     }
-    .refresh-btn:hover {
+    .refresh-btn:hover:not(:disabled) {
       background: #2a6ae0;
       transform: translate(1px, 1px);
       box-shadow: 2px 2px 0 #000;
     }
-    .refresh-btn:active {
+    .refresh-btn:active:not(:disabled) {
       transform: translate(3px, 3px);
       box-shadow: 0 0 0 #000;
+    }
+    .refresh-btn:disabled {
+      opacity: .55;
+      cursor: not-allowed;
     }
 
     /* STATUS CARDS */
@@ -303,6 +308,13 @@
     .status-badge.offline .dot {
       background: var(--red);
     }
+    .status-badge.warn {
+      background: #fff3c4;
+      color: #8a6a00;
+    }
+    .status-badge.warn .dot {
+      background: var(--yellow);
+    }
     .status-badge.checking {
       background: #e8ecf2;
       color: #6a7280;
@@ -341,17 +353,40 @@
       background: var(--white);
       color: var(--stone);
     }
-    .btn:hover {
+    .btn:hover:not(:disabled) {
       transform: translate(2px, 2px);
       box-shadow: 2px 2px 0 var(--stone);
     }
-    .btn:active {
+    .btn:active:not(:disabled) {
       transform: translate(4px, 4px);
       box-shadow: 0 0 0 var(--stone);
+    }
+    .btn:disabled {
+      opacity: .55;
+      cursor: not-allowed;
     }
     .btn.go { background: var(--grass); color: #fff; }
     .btn.dc { background: #5865f2; color: #fff; }
     .btn.copy { background: var(--sun); color: #fff; }
+
+    /* INFO BAR */
+    .info-bar {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      justify-content: center;
+      flex-wrap: wrap;
+      font-size: .82rem;
+      font-weight: 700;
+      color: #fff;
+      background: rgba(0,0,0,.25);
+      border: 3px solid var(--stone);
+      border-radius: 4px;
+      padding: 8px 14px;
+      margin-bottom: 18px;
+      text-align: center;
+    }
+    .info-bar i { color: var(--sky-2); }
 
     /* FOOTER */
     footer {
@@ -402,6 +437,8 @@
       opacity: 0;
       visibility: hidden;
       transition: opacity .25s, visibility .25s;
+      max-width: 92vw;
+      text-align: center;
     }
     .toast.show {
       opacity: 1;
@@ -454,6 +491,12 @@
 
     <div class="dirtbg">
       <div class="wrap">
+
+        <!-- Info -->
+        <div class="info-bar">
+          <i class="fas fa-circle-info"></i>
+          <span>Verificare la încărcarea paginii · apasă „Refresh tot" pentru reîmprospătare (cooldown 10s)</span>
+        </div>
 
         <!-- Quick actions -->
         <div class="actions">
@@ -556,7 +599,7 @@
         <img src="https://www.maynat.eu/images/logo.png" alt="Logo Maynat" width="34" height="34" />
         <b>MAYNAT</b>
       </a>
-      <small>© 2026 maynat.eu · status v2.1</small>
+      <small>© 2026 maynat.eu · status v2.2</small>
       <div class="soc">
         <a href="https://discord.maynat.eu" target="_blank" rel="noopener" aria-label="Discord"><i class="fab fa-discord"></i></a>
         <a href="https://www.tiktok.com/@maynat.ct.ws" target="_blank" rel="noopener" aria-label="TikTok"><i class="fab fa-tiktok"></i></a>
@@ -573,8 +616,16 @@
 
       const IP = 'maynat.eu';
       const toastEl = document.getElementById('toast');
-      let toastTimer = null;
+      const btnRefreshAll = document.getElementById('btnRefreshAll');
+      const REFRESH_COOLDOWN = 10000; // 10s
+      const WEB_TIMEOUT = 6000;
+      const MC_TIMEOUT = 8000;
 
+      let toastTimer = null;
+      let refreshLockedUntil = 0;
+      let checkRunning = false;
+
+      /* ---------- TOAST ---------- */
       function showToast(msg) {
         toastEl.textContent = msg;
         toastEl.classList.add('show');
@@ -582,17 +633,32 @@
         toastTimer = setTimeout(() => toastEl.classList.remove('show'), 2400);
       }
 
+      /* ---------- BADGE ---------- */
       function setBadge(badge, state, text) {
         badge.className = 'status-badge ' + state;
         badge.innerHTML = '<span class="dot"></span> ' + text;
       }
 
+      /* ---------- FETCH cu timeout ---------- */
+      function fetchWithTimeout(url, options, ms) {
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), ms);
+        return fetch(url, Object.assign({}, options, { signal: ctrl.signal }))
+          .finally(() => clearTimeout(timer));
+      }
+
+      /* ---------- MINECRAFT ---------- */
       async function checkMinecraft(ip, badge) {
         try {
-          const res = await fetch('https://api.mcsrvstat.us/3/' + encodeURIComponent(ip));
-          if (!res.ok) throw new Error('api');
+          const res = await fetchWithTimeout(
+            'https://api.mcsrvstat.us/3/' + encodeURIComponent(ip),
+            { cache: 'no-store' },
+            MC_TIMEOUT
+          );
+          if (!res.ok) throw new Error('http-' + res.status);
           const data = await res.json();
-          if (data.online) {
+
+          if (data && data.online === true) {
             let players = '?';
             let max = '';
             if (data.players) {
@@ -602,41 +668,82 @@
               }
             }
             setBadge(badge, 'online', 'Online · ' + players + max + ' jucători');
+            return;
+          }
+
+          // offline – încercăm să distingem DNS vs server oprit
+          // api.mcsrvstat.us returnează debug.ping / debug.query
+          let reason = 'Offline';
+          if (data && data.debug) {
+            const d = data.debug;
+            // dns poate lipsi; ping == false => nu răspunde
+            if (d.dns === false) reason = 'DNS eșuat';
+            else if (d.ping === false && d.query === false) reason = 'Server offline';
+            else if (d.ping === false) reason = 'Ping eșuat';
+          }
+          setBadge(badge, 'offline', reason);
+        } catch (err) {
+          if (err.name === 'AbortError') {
+            setBadge(badge, 'warn', 'Timeout');
+          } else if (err instanceof TypeError) {
+            // fetch a eșuat la nivel de rețea → DNS / host unreachable / CORS pe API
+            setBadge(badge, 'offline', 'Indisponibil (rețea/DNS)');
+          } else {
+            setBadge(badge, 'offline', 'Indisponibil');
+          }
+        }
+      }
+
+      /* ---------- WEB ----------
+       * Din browser nu putem citi răspunsul CORS. Folosim no-cors:
+       *  - dacă fetch reușește → răspuns opac → serverul a răspuns (online)
+       *  - dacă fetch aruncă TypeError → DNS eșuat / host unreachable / blocat
+       *  - dacă AbortError → timeout
+       * Încercăm HEAD, apoi GET ca fallback (unele servere refuză HEAD).
+       */
+      async function checkWeb(url, badge) {
+        // 1) HEAD
+        try {
+          await fetchWithTimeout(url, {
+            method: 'HEAD',
+            mode: 'no-cors',
+            cache: 'no-store',
+            redirect: 'follow'
+          }, WEB_TIMEOUT);
+          setBadge(badge, 'online', 'Online');
+          return;
+        } catch (e1) {
+          if (e1.name === 'AbortError') {
+            // timeout la HEAD – încercăm GET scurt
+          } else if (!(e1 instanceof TypeError)) {
+            setBadge(badge, 'offline', 'Eroare');
+            return;
+          }
+          // TypeError → mergem la GET
+        }
+
+        // 2) GET
+        try {
+          await fetchWithTimeout(url, {
+            method: 'GET',
+            mode: 'no-cors',
+            cache: 'no-store',
+            redirect: 'follow'
+          }, WEB_TIMEOUT);
+          setBadge(badge, 'online', 'Online');
+        } catch (e2) {
+          if (e2.name === 'AbortError') {
+            setBadge(badge, 'warn', 'Timeout');
+          } else if (e2 instanceof TypeError) {
+            // requestul nu a plecat deloc → DNS eșuat / host unreachable
+            setBadge(badge, 'offline', 'DNS eșuat / inaccesibil');
           } else {
             setBadge(badge, 'offline', 'Offline');
           }
-        } catch (e) {
-          setBadge(badge, 'offline', 'Indisponibil');
         }
       }
 
-      async function checkWeb(url, badge) {
-        // Browser-side CORS: most sites block us.
-        // We try a short GET with timeout; on opaque/no-cors we treat as "reachable attempt".
-        // For real production, use a backend proxy. Here we do best-effort.
-        try {
-          const ctrl = new AbortController();
-          const t = setTimeout(() => ctrl.abort(), 4500);
-          const res = await fetch(url, {
-            method: 'GET',
-            mode: 'no-cors',
-            signal: ctrl.signal,
-            cache: 'no-store'
-          });
-          clearTimeout(t);
-          // opaque response → request left the browser, assume online
-          setBadge(badge, 'online', 'Online');
-        } catch (e) {
-          // Fallback: try again without signal (some browsers)
-          try {
-            await fetch(url, { method: 'HEAD', mode: 'no-cors', cache: 'no-store' });
-            setBadge(badge, 'online', 'Online');
-          } catch (e2) {
-            setBadge(badge, 'offline', 'Offline / blocat CORS');
-          }
-        }
-      }
-
+      /* ---------- CARD ---------- */
       async function checkCard(card) {
         const badge = card.querySelector('.status-badge');
         if (!badge) return;
@@ -651,23 +758,46 @@
         }
       }
 
+      /* ---------- delay mic între requesturi ---------- */
+      function sleep(ms) {
+        return new Promise(r => setTimeout(r, ms));
+      }
+
+      /* ---------- GROUP ---------- */
       async function checkGroup(groupId) {
         const section = document.getElementById('group-' + groupId);
         if (!section) return;
         const cards = section.querySelectorAll('.status-card');
         for (const card of cards) {
           await checkCard(card);
+          await sleep(150);
         }
       }
 
-      async function checkAll() {
+      /* ---------- ALL ---------- */
+      async function checkAll(force) {
+        if (checkRunning) return;
+        const now = Date.now();
+        if (!force && now < refreshLockedUntil) {
+          const left = Math.ceil((refreshLockedUntil - now) / 1000);
+          showToast('Așteaptă ' + left + 's înainte de refresh');
+          return;
+        }
+        checkRunning = true;
+        refreshLockedUntil = now + REFRESH_COOLDOWN;
+        btnRefreshAll.disabled = true;
+
         const cards = document.querySelectorAll('.status-card');
         for (const card of cards) {
           await checkCard(card);
+          await sleep(150);
         }
+
+        btnRefreshAll.disabled = false;
+        checkRunning = false;
       }
 
-      // Copy IP
+      /* ---------- COPY IP ---------- */
       document.getElementById('btnCopyIp').addEventListener('click', function () {
         const text = IP;
         if (navigator.clipboard && navigator.clipboard.writeText) {
@@ -688,22 +818,24 @@
         }
       });
 
-      document.getElementById('btnRefreshAll').addEventListener('click', function () {
-        checkAll();
-        showToast('Status actualizat');
+      /* ---------- REFRESH ALL ---------- */
+      btnRefreshAll.addEventListener('click', function () {
+        checkAll(false);
       });
 
+      /* ---------- REFRESH PE GRUP ---------- */
       document.querySelectorAll('.refresh-btn').forEach(function (btn) {
-        btn.addEventListener('click', function () {
+        btn.addEventListener('click', async function () {
           const g = this.dataset.group;
-          checkGroup(g);
+          if (this.disabled) return;
+          this.disabled = true;
+          await checkGroup(g);
+          this.disabled = false;
           showToast('Grup actualizat');
         });
       });
 
-      // Start
-      checkAll();
-      setInterval(checkAll, 30000);
+      setTimeout(function () { checkAll(true); }, 300);
 
     })();
   </script>
